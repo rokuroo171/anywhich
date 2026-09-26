@@ -32,20 +32,42 @@ fn main() -> ExitCode {
         let regs = resolver::resolvers();
         println!();
         println!("Checked:");
+        let mut any_checked = false;
+        let mut found_somewhere = false;
         for r in &regs {
-            let found = r.resolve(&args.name);
-            if found.is_empty() {
-                println!("  - {}: not found", r.name());
-            } else {
-                let pkgs: Vec<String> = found
-                    .iter()
-                    .filter_map(|e| e.package_name.clone())
-                    .collect();
-                println!("  - {}: {}", r.name(), pkgs.join(", "));
+            let result = r.resolve(&args.name);
+            match result.status {
+                resolver::SourceStatus::Checked => {
+                    any_checked = true;
+                    if result.entries.is_empty() {
+                        println!("  - {}: not found", r.name());
+                    } else {
+                        found_somewhere = true;
+                        let pkgs: Vec<String> = result
+                            .entries
+                            .iter()
+                            .filter_map(|e| e.package_name.clone())
+                            .collect();
+                        println!("  - {}: {}", r.name(), pkgs.join(", "));
+                    }
+                }
+                resolver::SourceStatus::Unavailable(reason) => {
+                    println!("  - {}: unavailable ({reason})", r.name());
+                }
             }
         }
         println!();
-        println!("{} is not installed via any known source.", args.name);
+        if found_somewhere {
+            return ExitCode::from(0);
+        }
+        if any_checked {
+            println!("{} is not installed via any known source.", args.name);
+        } else {
+            println!(
+                "{} could not be checked via any known source.",
+                args.name
+            );
+        }
         return ExitCode::from(1);
     }
 

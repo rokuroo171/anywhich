@@ -1,7 +1,7 @@
 use std::process::Command;
 
 use crate::entry::{ResolvedEntry, Source};
-use crate::resolver::Resolver;
+use crate::resolver::{Resolver, SourceResult};
 
 /// Local pacman database view of one binary query.
 ///
@@ -15,21 +15,31 @@ impl Resolver for PacmanResolver {
         "pacman"
     }
 
-    fn resolve(&self, binary_name: &str) -> Vec<ResolvedEntry> {
+    fn resolve(&self, binary_name: &str) -> SourceResult {
         let out = Command::new("pacman").arg("-Ql").output();
-        let Ok(out) = out else {
-            return Vec::new();
+        let out = match out {
+            Ok(o) => o,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                return SourceResult::unavailable("pacman not found");
+            }
+            Err(e) => {
+                return SourceResult::unavailable(format!("pacman could not be run: {e}"));
+            }
         };
+        if !out.status.success() {
+            return SourceResult::unavailable(format!("pacman exited with {}", out.status));
+        }
         let stdout = String::from_utf8_lossy(&out.stdout);
         let names = owned_package_names(&stdout, binary_name);
-        names
+        let entries = names
             .into_iter()
             .map(|pkg| {
                 let mut e = ResolvedEntry::new(Source::Pacman);
                 e.package_name = Some(pkg.to_string());
                 e
             })
-            .collect()
+            .collect();
+        SourceResult::checked(entries)
     }
 }
 
