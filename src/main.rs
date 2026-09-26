@@ -105,6 +105,7 @@ fn source_name(source: entry::Source) -> &'static str {
     match source {
         entry::Source::Path => "PATH",
         entry::Source::Pacman => "pacman",
+        entry::Source::Apt => "apt",
         entry::Source::Flatpak => "flatpak",
         entry::Source::Nix => "nix",
     }

@@ -5,6 +5,7 @@ use std::path::PathBuf;
 pub enum Source {
     Path,
     Pacman,
+    Apt,
     Flatpak,
     Nix,
 }
