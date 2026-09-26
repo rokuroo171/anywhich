@@ -1,5 +1,7 @@
 use crate::entry::ResolvedEntry;
 
+pub mod pacman;
+
 /// Outcome of one source's check.
 ///
 /// `Checked` means the resolver ran to completion; `entries` may still be
@@ -37,7 +39,7 @@ pub trait Resolver {
 
 /// Collects every resolver, in output display order.
 pub fn resolvers() -> Vec<Box<dyn Resolver>> {
-    vec![Box::new(crate::pacman::PacmanResolver)]
+    vec![Box::new(pacman::PacmanResolver)]
 }
 #[cfg(test)]
 mod tests {

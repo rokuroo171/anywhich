@@ -4,7 +4,6 @@ use clap::Parser;
 use owo_colors::OwoColorize;
 
 mod entry;
-mod pacman;
 mod pathwalk;
 mod resolver;
 
