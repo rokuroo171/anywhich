@@ -1,0 +1,15 @@
+[package]
+name = "anywhich"
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+description = "A which that knows what is on your system"
+repository = "https://github.com/elliot/anywhich"
+
+[dependencies]
+clap = { version = "4", features = ["derive"] }
+owo-colors = "4"
+
+[[bin]]
+name = "anyw"
+path = "src/main.rs"
