@@ -106,6 +106,7 @@ fn source_name(source: entry::Source) -> &'static str {
         entry::Source::Path => "PATH",
         entry::Source::Pacman => "pacman",
         entry::Source::Apt => "apt",
+        entry::Source::Dnf => "dnf",
         entry::Source::Flatpak => "flatpak",
         entry::Source::Nix => "nix",
     }

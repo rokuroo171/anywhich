@@ -6,6 +6,7 @@ pub enum Source {
     Path,
     Pacman,
     Apt,
+    Dnf,
     Flatpak,
     Nix,
 }

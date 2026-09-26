@@ -43,6 +43,7 @@ pub fn resolvers() -> Vec<Box<dyn Resolver>> {
     vec![
         Box::new(pkgdb::pacman::PacmanResolver),
         Box::new(pkgdb::apt::AptResolver),
+        Box::new(pkgdb::dnf::DnfResolver),
         Box::new(prefix::flatpak::FlatpakResolver),
         Box::new(prefix::nix::NixResolver),
     ]
