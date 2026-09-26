@@ -4,7 +4,7 @@ A `which` that finds what is installed on your system, even when it is not on `$
 
 `which` stops at `$PATH` and only shows the first hit. On a machine with more than one package manager, a binary can be installed and still come back empty. `anyw` walks all of `$PATH`, shows every match in order, and tells you which one runs.
 
-Linux works today, with resolvers for pacman, apt, dnf, Flatpak, Nix, npm -g, cargo install, go install, and pipx. Windows does not work yet: the PATH walk ignores PATHEXT, so it misses `python.exe` and counts extensionless files as hits. macOS is untested.
+Linux works today, with resolvers for pacman, apt, dnf, Flatpak, Nix, npm -g, cargo install, go install, and pipx. Windows lookups follow PATHEXT (`.exe`, `.bat`, `.cmd`); the Scoop and Chocolatey resolvers are fixture-tested only and no Windows binary ships yet. macOS is untested.
 
 ## Usage
 

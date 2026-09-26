@@ -5,6 +5,7 @@ use owo_colors::OwoColorize;
 
 mod entry;
 mod merge;
+mod pathext;
 mod pathwalk;
 mod resolver;
 mod why;

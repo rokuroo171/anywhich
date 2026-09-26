@@ -3,6 +3,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::entry::{ResolvedEntry, Source};
+use crate::pathext;
 
 /// Walk $PATH in order and return every directory that exists and is readable.
 /// Unreadable or missing directories are reported separately so the output can
@@ -24,38 +25,73 @@ pub fn path_dirs() -> (Vec<PathBuf>, Vec<String>) {
     (usable, skipped)
 }
 
+/// PATHEXT lookup rules for this platform: the parsed PATHEXT on Windows,
+/// an empty list elsewhere. Empty means no extension expansion and no
+/// extension filter, which is exactly Unix shell behavior and keeps the
+/// Unix walk's syscall count identical to the pre-PATHEXT version.
+#[cfg(windows)]
+fn pathext_rules() -> Vec<(String, bool)> {
+    pathext::parse(std::env::var("PATHEXT").ok().as_deref())
+}
+
+#[cfg(not(windows))]
+fn pathext_rules() -> Vec<(String, bool)> {
+    Vec::new()
+}
+
 /// Find every PATH entry for `binary_name`, ranked by PATH order.
 /// Rank 0 is the one the shell would execute.
 pub fn walk(binary_name: &str, dirs: &[PathBuf]) -> Vec<ResolvedEntry> {
+    let exts = pathext_rules();
+    walk_with(binary_name, dirs, &exts)
+}
+
+/// walk() with injected PATHEXT rules, so the Windows expansion and ordering
+/// rules are testable from any platform.
+pub fn walk_with(
+    binary_name: &str,
+    dirs: &[PathBuf],
+    exts: &[(String, bool)],
+) -> Vec<ResolvedEntry> {
+    let names = pathext::candidate_names(binary_name, exts);
     let mut found = Vec::new();
     for (idx, dir) in dirs.iter().enumerate() {
-        let candidate = dir.join(binary_name);
-        if is_executable(&candidate) {
-            let mut entry = ResolvedEntry::new(Source::Path);
-            entry.path = Some(candidate);
-            entry.rank = idx;
-            entry.active = found.is_empty();
-            found.push(entry);
+        for name in &names {
+            let candidate = dir.join(name);
+            if is_executable(&candidate, exts) {
+                let mut entry = ResolvedEntry::new(Source::Path);
+                entry.path = Some(candidate);
+                entry.rank = idx;
+                entry.active = found.is_empty();
+                found.push(entry);
+                break;
+            }
         }
     }
     found
 }
 
-fn is_executable(path: &Path) -> bool {
+#[cfg(unix)]
+fn is_executable(path: &Path, _exts: &[(String, bool)]) -> bool {
+    use std::os::unix::fs::PermissionsExt;
     fs::metadata(path)
-        .map(|meta| meta.is_file() && is_executable_mode(&meta))
+        .map(|meta| meta.is_file() && meta.permissions().mode() & 0o111 != 0)
         .unwrap_or(false)
 }
 
-#[cfg(unix)]
-fn is_executable_mode(meta: &std::fs::Metadata) -> bool {
-    use std::os::unix::fs::PermissionsExt;
-    meta.permissions().mode() & 0o111 != 0
-}
-
-#[cfg(not(unix))]
-fn is_executable_mode(_meta: &std::fs::Metadata) -> bool {
-    true
+/// On Windows, membership in PATHEXT is what makes a file a command.
+#[cfg(windows)]
+fn is_executable(path: &Path, exts: &[(String, bool)]) -> bool {
+    let Ok(meta) = fs::metadata(path) else {
+        return false;
+    };
+    if !meta.is_file() {
+        return false;
+    }
+    match path.file_name().and_then(|n| n.to_str()) {
+        Some(file_name) => pathext::is_executable_extension(file_name, exts),
+        None => false,
+    }
 }
 
 #[cfg(test)]
@@ -125,5 +161,56 @@ mod tests {
 
         fs::remove_file(&bin).unwrap();
         fs::remove_dir(&tmp).unwrap();
+    }
+
+    #[test]
+    fn empty_pathext_rules_expand_nothing() {
+        assert_eq!(pathext::candidate_names("tool", &[]), vec!["tool"]);
+    }
+
+    #[test]
+    fn pathext_expansion_finds_the_only_ext_variant() {
+        let tmp = env::temp_dir().join("anywhich-test-pathtext");
+        fs::create_dir_all(&tmp).unwrap();
+        let bin = tmp.join("tool.BAT");
+        fs::write(&bin, b"data").unwrap();
+        make_executable(&bin);
+
+        let exts = pathext::parse(Some(".COM;.EXE;.BAT"));
+        let hits = walk_with("tool", &[tmp.clone()], &exts);
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].path, Some(tmp.join("tool.BAT")));
+        assert!(hits[0].active);
+
+        fs::remove_dir_all(&tmp).unwrap();
+    }
+
+    #[test]
+    fn pathext_order_prefers_the_typed_name_then_ext_order() {
+        let tmp = env::temp_dir().join("anywhich-test-pathtext-order");
+        fs::create_dir_all(&tmp).unwrap();
+        for name in ["tool", "tool.EXE", "tool.BAT"] {
+            let p = tmp.join(name);
+            fs::write(&p, b"data").unwrap();
+            make_executable(&p);
+        }
+
+        let exts = pathext::parse(Some(".COM;.EXE;.BAT"));
+        let hits = walk_with("tool", &[tmp.clone()], &exts);
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].path, Some(tmp.join("tool")));
+
+        let hits = walk_with("tool.BAT", &[tmp.clone()], &exts);
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].path, Some(tmp.join("tool.BAT")));
+
+        fs::remove_dir_all(&tmp).unwrap();
+    }
+
+    fn make_executable(path: &Path) {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = fs::metadata(path).unwrap().permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(path, perms).unwrap();
     }
 }
