@@ -30,6 +30,19 @@ pub struct ResolvedEntry {
     pub rank: usize,
 }
 
+impl Source {
+    pub fn name(self) -> &'static str {
+        match self {
+            Source::Path => "PATH",
+            Source::Pacman => "pacman",
+            Source::Apt => "apt",
+            Source::Dnf => "dnf",
+            Source::Flatpak => "flatpak",
+            Source::Nix => "nix",
+        }
+    }
+}
+
 impl ResolvedEntry {
     pub fn new(source: Source) -> Self {
         ResolvedEntry {

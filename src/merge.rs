@@ -13,7 +13,7 @@ pub struct Merged {
 
 /// Identity of a file across symlinked directories (usrmerge, nix profiles):
 /// the canonical path when resolvable, the literal path otherwise.
-fn key(path: &Path) -> String {
+pub(crate) fn key(path: &Path) -> String {
     match fs::canonicalize(path) {
         Ok(p) => p.to_string_lossy().to_string(),
         Err(_) => path.to_string_lossy().to_string(),

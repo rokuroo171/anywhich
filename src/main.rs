@@ -7,6 +7,7 @@ mod entry;
 mod merge;
 mod pathwalk;
 mod resolver;
+mod why;
 
 #[derive(Parser)]
 #[command(name = "anyw", version, about)]
@@ -17,6 +18,10 @@ struct Args {
     /// No color, scriptable output
     #[arg(long)]
     plain: bool,
+
+    /// Explain why each PATH entry ranked where it did
+    #[arg(long)]
+    why: bool,
 }
 
 fn main() -> ExitCode {
@@ -53,6 +58,11 @@ fn main() -> ExitCode {
     }
 
     println!("PATH:");
+    let reason_lines = if args.why {
+        why::reasons(&merged.path_hits)
+    } else {
+        Vec::new()
+    };
     for (idx, hit) in merged.path_hits.iter().enumerate() {
         let path = hit
             .path
@@ -69,6 +79,17 @@ fn main() -> ExitCode {
             println!("{}{}", line.green(), suffix);
         } else {
             println!("{}{}", line, suffix);
+        }
+        if let Some(reason) = reason_lines.get(idx) {
+            println!("       {reason}");
+        }
+    }
+
+    if args.why && !skipped.is_empty() {
+        println!();
+        println!("Skipped PATH directories:");
+        for dir in &skipped {
+            println!("  {dir}");
         }
     }
 
@@ -93,22 +114,11 @@ fn source_label(entry: &entry::ResolvedEntry) -> Option<String> {
         entry::Source::Path => return None,
         s => s,
     };
-    let name = source_name(source);
+    let name = source.name();
     match (&entry.package_name, &entry.package_version) {
         (Some(pkg), Some(ver)) => Some(format!("{name}: {pkg} {ver}")),
         (Some(pkg), None) => Some(format!("{name}: {pkg}")),
         (None, _) => Some(name.to_string()),
-    }
-}
-
-fn source_name(source: entry::Source) -> &'static str {
-    match source {
-        entry::Source::Path => "PATH",
-        entry::Source::Pacman => "pacman",
-        entry::Source::Apt => "apt",
-        entry::Source::Dnf => "dnf",
-        entry::Source::Flatpak => "flatpak",
-        entry::Source::Nix => "nix",
     }
 }
 
