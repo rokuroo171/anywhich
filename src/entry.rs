@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// Where a resolved entry came from.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -9,6 +9,12 @@ pub enum Source {
     Dnf,
     Flatpak,
     Nix,
+    Npm,
+    Cargo,
+    Go,
+    Pipx,
+    Scoop,
+    Chocolatey,
 }
 
 /// One place a queried binary was found, or one candidate a resolver rejected.
@@ -39,11 +45,25 @@ impl Source {
             Source::Dnf => "dnf",
             Source::Flatpak => "flatpak",
             Source::Nix => "nix",
+            Source::Npm => "npm",
+            Source::Cargo => "cargo",
+            Source::Go => "go",
+            Source::Pipx => "pipx",
+            Source::Scoop => "scoop",
+            Source::Chocolatey => "chocolatey",
         }
     }
 }
 
 impl ResolvedEntry {
+    /// A hit known only through a bin-link location, with no package identity
+    /// (a store exposes the link but no readable record of what owns it).
+    pub fn stub_only(source: Source, path: &Path) -> Self {
+        let mut e = ResolvedEntry::new(source);
+        e.path = Some(path.to_path_buf());
+        e
+    }
+
     pub fn new(source: Source) -> Self {
         ResolvedEntry {
             path: None,

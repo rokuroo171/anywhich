@@ -46,6 +46,12 @@ pub fn resolvers() -> Vec<Box<dyn Resolver>> {
         Box::new(pkgdb::dnf::DnfResolver),
         Box::new(prefix::flatpak::FlatpakResolver),
         Box::new(prefix::nix::NixResolver),
+        Box::new(prefix::npm::NpmResolver),
+        Box::new(prefix::cargo::CargoResolver::new()),
+        Box::new(prefix::go::GoResolver),
+        Box::new(prefix::pipx::PipxResolver),
+        Box::new(prefix::scoop::ScoopResolver),
+        Box::new(prefix::chocolatey::ChocolateyResolver),
     ]
 }
 #[cfg(test)]

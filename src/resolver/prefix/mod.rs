@@ -1,2 +1,8 @@
+pub mod chocolatey;
+pub mod cargo;
 pub mod flatpak;
+pub mod go;
 pub mod nix;
+pub mod npm;
+pub mod pipx;
+pub mod scoop;
