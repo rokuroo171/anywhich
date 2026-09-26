@@ -1,6 +1,7 @@
 use crate::entry::ResolvedEntry;
 
 pub mod pkgdb;
+pub mod prefix;
 
 /// Outcome of one source's check.
 ///
@@ -39,7 +40,7 @@ pub trait Resolver {
 
 /// Collects every resolver, in output display order.
 pub fn resolvers() -> Vec<Box<dyn Resolver>> {
-    vec![Box::new(pkgdb::pacman::PacmanResolver)]
+    vec![Box::new(pkgdb::pacman::PacmanResolver), Box::new(prefix::flatpak::FlatpakResolver)]
 }
 #[cfg(test)]
 mod tests {
