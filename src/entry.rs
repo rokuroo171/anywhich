@@ -1,17 +1,11 @@
 use std::path::PathBuf;
 
 /// Where a resolved entry came from.
-///
-/// Flatpak and Nix have no constructor yet because those resolvers are
-/// follow-up work; the variants are reserved now so resolvers slot in
-/// without a core rewrite.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Source {
     Path,
     Pacman,
-    #[allow(dead_code)]
     Flatpak,
-    #[allow(dead_code)]
     Nix,
 }
 

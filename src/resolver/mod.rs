@@ -40,7 +40,11 @@ pub trait Resolver {
 
 /// Collects every resolver, in output display order.
 pub fn resolvers() -> Vec<Box<dyn Resolver>> {
-    vec![Box::new(pkgdb::pacman::PacmanResolver), Box::new(prefix::flatpak::FlatpakResolver)]
+    vec![
+        Box::new(pkgdb::pacman::PacmanResolver),
+        Box::new(prefix::flatpak::FlatpakResolver),
+        Box::new(prefix::nix::NixResolver),
+    ]
 }
 #[cfg(test)]
 mod tests {
