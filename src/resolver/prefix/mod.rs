@@ -6,3 +6,4 @@ pub mod nix;
 pub mod npm;
 pub mod pipx;
 pub mod scoop;
+pub mod snap;

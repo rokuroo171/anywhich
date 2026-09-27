@@ -65,6 +65,7 @@ pub fn resolvers() -> Vec<Box<dyn Resolver>> {
         Box::new(pkgdb::dnf::DnfResolver),
         Box::new(pkgdb::apk::ApkResolver),
         Box::new(prefix::flatpak::FlatpakResolver),
+        Box::new(prefix::snap::SnapResolver),
         Box::new(prefix::nix::NixResolver),
         Box::new(prefix::npm::NpmResolver),
         Box::new(prefix::cargo::CargoResolver::new()),
