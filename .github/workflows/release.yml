@@ -43,7 +43,7 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y ${{ matrix.apt }}
 
       - name: Build
-        run: cargo build --release --target ${{ matrix.target }}
+        run: cargo build --release --target ${{ matrix.target }} --locked
         env:
           RUSTFLAGS: ${{ matrix.rustflags }}
 

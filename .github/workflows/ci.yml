@@ -14,7 +14,7 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
 
       - name: Test
-        run: cargo test
+        run: cargo test --locked
 
   windows-gnu-check:
     name: check x86_64-pc-windows-gnu
@@ -29,4 +29,4 @@ jobs:
 
       # cargo check only type-checks, so no mingw-w64 is needed here.
       - name: Check
-        run: cargo check --target x86_64-pc-windows-gnu
+        run: cargo check --target x86_64-pc-windows-gnu --locked
