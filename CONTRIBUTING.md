@@ -17,7 +17,7 @@ anywhich diagnoses environments, so your output is the bug report. Please includ
 
 1. The verbatim output of `anyw <name> --why --plain`
 2. Your OS and distribution
-3. Which package managers you have installed (`pacman`, `apt`, `dnf`, `flatpak`, `nix`, `npm`, `cargo`, `go`, `pipx`, and so on)
+3. Which package managers you have installed (`pacman`, `apt`, `dnf`, `apk`, `flatpak`, `nix`, `npm`, `cargo`, `go`, `pipx`, and so on)
 4. What you expected to see, if it is not obvious
 
 Wrap pasted output in code blocks. If the output is long, trim unrelated resolvers but keep the Checked block intact; it is usually the interesting part.
@@ -46,7 +46,7 @@ Platform rule: a platform ships binaries only after it works end to end there. I
 
 ## Wanted right now
 
-- pkgdb resolvers: apk (Alpine), xbps (Void), zypper (openSUSE)
+- pkgdb resolvers: xbps (Void), zypper (openSUSE)
 - Windows verification from a real Windows box (Scoop and Chocolatey resolvers exist, fixture-tested only)
 - macOS reports (the walk should work; nobody has confirmed it)
 

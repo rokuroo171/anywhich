@@ -1,4 +1,3 @@
-use std::fs;
 use std::path::Path;
 use std::process::ExitCode;
 
@@ -160,6 +159,7 @@ fn note_for(exe: &Path, path_hits: &[entry::ResolvedEntry], dir_count: usize, so
 /// Falls back to path equality when either side cannot be statted (tests).
 #[cfg(unix)]
 fn same_file(a: &Path, b: &Path) -> bool {
+    use std::fs;
     use std::os::unix::fs::MetadataExt;
     match (fs::metadata(a), fs::metadata(b)) {
         (Ok(ma), Ok(mb)) => (ma.dev(), ma.ino()) == (mb.dev(), mb.ino()),
