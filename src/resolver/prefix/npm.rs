@@ -50,13 +50,26 @@ impl Resolver for NpmResolver {
         let mut e = ResolvedEntry::new(Source::Npm);
         e.package_name = Some(name);
         e.package_version = version;
-        if let Some(prefix) = root.parent() {
+        if let Some(prefix) = npm_prefix(&root) {
             let stub = prefix.join("bin").join(binary_name);
             if is_file(&stub) {
                 e.path = Some(stub);
             }
         }
         SourceResult::checked(vec![e])
+    }
+}
+
+/// npm's global prefix, derived from the `npm root -g` output: the root is
+/// `<prefix>/node_modules`, or `<prefix>/lib/node_modules` on Debian-style
+/// layouts, and the bin dir is `<prefix>/bin` either way. Taking root.parent()
+/// alone would invent `<prefix>/lib/bin`, a directory npm never writes.
+fn npm_prefix(root: &Path) -> Option<PathBuf> {
+    let parent = root.parent()?;
+    if parent.file_name()?.to_str()? == "lib" {
+        parent.parent().map(Path::to_path_buf)
+    } else {
+        Some(parent.to_path_buf())
     }
 }
 
@@ -226,5 +239,19 @@ mod tests {
     fn short_name_takes_last_segment() {
         assert_eq!(short_name("/usr/lib/node_modules/corepack"), "corepack");
         assert_eq!(short_name("/usr/lib/node_modules/@scope/tool"), "tool");
+    }
+
+    #[test]
+    fn prefix_derivation_handles_both_layouts() {
+        assert_eq!(
+            npm_prefix(Path::new("/usr/lib/node_modules")).map(|p| p.to_string_lossy().to_string()),
+            Some("/usr".to_string())
+        );
+        assert_eq!(
+            npm_prefix(Path::new("/home/u/.npm-global/node_modules"))
+                .map(|p| p.to_string_lossy().to_string()),
+            Some("/home/u/.npm-global".to_string())
+        );
+        assert_eq!(npm_prefix(Path::new("/usr")), None);
     }
 }
