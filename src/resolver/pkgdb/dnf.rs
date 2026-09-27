@@ -7,7 +7,9 @@ use crate::resolver::{Resolver, SourceResult};
 ///
 /// One `rpm -qa` with an array queryformat emits "name version /path" per
 /// installed file, which gives ownership, version, and a path for PATH
-/// merging in a single spawn.
+/// merging in a single spawn. `=` pins NAME and VERSION to the first array
+/// element while FILENAMES iterates; the unpinned form dies on rpm 6 with
+/// "array iterator used with different sized arrays", still exiting 0.
 pub struct DnfResolver;
 
 impl Resolver for DnfResolver {
@@ -18,7 +20,7 @@ impl Resolver for DnfResolver {
     fn resolve(&self, binary_name: &str) -> SourceResult {
         let out = Command::new("rpm")
             .arg("-qa")
-            .arg("--queryformat=[%{NAME} %{VERSION} %{FILENAMES}\\n]")
+            .arg("--queryformat=[%{=NAME} %{=VERSION} %{FILENAMES}\\n]")
             .output();
         let out = match out {
             Ok(o) => o,
@@ -31,6 +33,14 @@ impl Resolver for DnfResolver {
         };
         if !out.status.success() {
             return SourceResult::unavailable(format!("rpm exited with {}", out.status));
+        }
+        // rpm 6 exits 0 even when it rejects the queryformat, printing the
+        // error to stderr and a partial listing to stdout, which parses as a
+        // truthful-looking empty result. Only stderr tells the difference.
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        if stderr.contains("incorrect format") {
+            let reason = stderr.lines().next().unwrap_or_default().trim().to_string();
+            return SourceResult::unavailable(format!("rpm queryformat error: {reason}"));
         }
         let stdout = String::from_utf8_lossy(&out.stdout);
         let entries = owned_files(&stdout, binary_name)
@@ -73,31 +83,40 @@ pub fn owned_files(qf_output: &str, binary_name: &str) -> Vec<(String, String, S
 mod tests {
     use super::*;
 
+    // Lines from `rpm -qa --queryformat='[%{=NAME} %{=VERSION} %{FILENAMES}\n]'`
+    // on rpm 6.0.2 (Fedora 44), plus one synthetic spaced path.
     const QF_FIXTURE: &str = "\
-glibc 2.39-9.fc40 /usr/bin/glibc-bin
-python3 3.12.6-1.fc40 /usr/bin/python3
-python3 3.12.6-1.fc40 /usr/bin/python3.12
-python3 3.12.6-1.fc40 /usr/lib/python3.12/abc.py
-bash 5.2.26-1.fc40 /opt/my space dir/bin/tool
+libgcc 16.2.1 /lib64/libgcc_s-16-20260819.so.1
+libgcc 16.2.1 /lib64/libgcc_s.so.1
+libgcc 16.2.1 /usr/lib/.build-id
+fish 4.6.0 /usr/bin/fish
+fish 4.6.0 /usr/bin/fish_indent
+fish 4.6.0 /usr/bin/fish_key_reader
+bash 5.3.0 /opt/my space dir/bin/tool
 ";
 
     #[test]
     fn finds_owner_with_version_and_path() {
         assert_eq!(
-            owned_files(QF_FIXTURE, "python3"),
+            owned_files(QF_FIXTURE, "fish"),
             vec![(
-                "python3".to_string(),
-                "3.12.6-1.fc40".to_string(),
-                "/usr/bin/python3".to_string()
+                "fish".to_string(),
+                "4.6.0".to_string(),
+                "/usr/bin/fish".to_string()
             )]
         );
     }
 
     #[test]
     fn matches_only_exact_binary_name() {
-        let found = owned_files(QF_FIXTURE, "python3.12");
-        assert_eq!(found[0].0, "python3");
-        assert!(owned_files(QF_FIXTURE, "python3X").is_empty());
+        let found = owned_files(QF_FIXTURE, "fish_indent");
+        assert_eq!(found[0].0, "fish");
+        assert!(owned_files(QF_FIXTURE, "fishX").is_empty());
+    }
+
+    #[test]
+    fn directory_lines_never_match() {
+        assert!(owned_files(QF_FIXTURE, "build-id").is_empty());
     }
 
     #[test]
@@ -109,9 +128,10 @@ bash 5.2.26-1.fc40 /opt/my space dir/bin/tool
 
     #[test]
     fn multiple_owners_are_all_reported() {
-        let found = owned_files(QF_FIXTURE, "glibc-bin");
-        assert_eq!(found.len(), 1);
-        assert_eq!(found[0].0, "glibc");
+        let fixture = "pkg-a 1.0 /usr/bin/tool\npkg-b 2.0 /usr/bin/tool\n";
+        let found = owned_files(fixture, "tool");
+        let names: Vec<&str> = found.iter().map(|(n, _, _)| n.as_str()).collect();
+        assert_eq!(names, vec!["pkg-a", "pkg-b"]);
     }
 
     #[test]
