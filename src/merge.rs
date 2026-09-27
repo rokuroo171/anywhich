@@ -55,8 +55,6 @@ mod tests {
     use super::*;
     use crate::entry::Source;
     use crate::resolver::SourceResult;
-    use std::env;
-    use std::fs;
     use std::path::PathBuf;
 
     fn path_entry(source: Source, path: &Path) -> ResolvedEntry {
@@ -65,8 +63,15 @@ mod tests {
         e
     }
 
+    // Unix-only: the claim path resolves profile symlinks, and Windows
+    // symlink creation needs privileges the test must not assume. The
+    // unclaimed and pathless cases below run everywhere.
+    #[cfg(unix)]
     #[test]
     fn claims_path_hits_by_canonical_path() {
+        use std::env;
+        use std::fs;
+
         let tmp = env::temp_dir().join("anywhich-merge-claim");
         let store = tmp.join("store").join("0123456789abcdefghijklmnopqrstuv-tool-1.0");
         let profile = tmp.join("profile");

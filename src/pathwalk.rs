@@ -116,6 +116,10 @@ mod tests {
         assert_eq!(skipped, vec!["/nonexistent-anywhich-dir".to_string()]);
     }
 
+    // Unix-only: a plain extensionless name is only executable where an
+    // exec bit exists. The Windows twin below exercises the same ordering
+    // through the PATHEXT rules the Windows walk actually uses.
+    #[cfg(unix)]
     #[test]
     fn finds_every_match_in_order_and_marks_first_active() {
         let tmp = env::temp_dir().join("anywhich-test-order");
@@ -125,13 +129,8 @@ mod tests {
         fs::create_dir_all(&b).unwrap();
         for dir in [&a, &b] {
             let bin = dir.join("tool");
-            let mut perms = fs::metadata(&dir).unwrap().permissions();
-            use std::os::unix::fs::PermissionsExt;
-            fs::set_permissions(&dir, perms).unwrap();
             fs::write(&bin, b"#!/bin/sh\n").unwrap();
-            perms = fs::metadata(&bin).unwrap().permissions();
-            perms.set_mode(0o755);
-            fs::set_permissions(&bin, perms).unwrap();
+            make_executable(&bin);
         }
 
         let dirs = vec![a.clone(), b.clone()];
@@ -150,6 +149,36 @@ mod tests {
         fs::remove_dir_all(&tmp).unwrap();
     }
 
+    #[cfg(windows)]
+    #[test]
+    fn finds_every_match_in_order_and_marks_first_active() {
+        let tmp = env::temp_dir().join("anywhich-test-order-win");
+        let a = tmp.join("a");
+        let b = tmp.join("b");
+        fs::create_dir_all(&a).unwrap();
+        fs::create_dir_all(&b).unwrap();
+        for dir in [&a, &b] {
+            fs::write(dir.join("tool.exe"), b"mz").unwrap();
+        }
+
+        let exts = pathext::parse(Some(".COM;.EXE;.BAT"));
+        let hits = walk_with("tool", &[a.clone(), b.clone()], &exts);
+
+        assert_eq!(hits.len(), 2);
+        assert!(hits[0].active);
+        assert!(!hits[1].active);
+        assert_eq!(hits[0].path, Some(a.join("tool.exe")));
+        assert_eq!(hits[1].path, Some(b.join("tool.exe")));
+        assert_eq!(hits[0].rank, 0);
+        assert_eq!(hits[1].rank, 1);
+
+        fs::remove_dir_all(&tmp).unwrap();
+    }
+
+    // Unix-only: without an exec bit there is no way to mark a plain file
+    // non-executable. On Windows the PATHEXT membership filter plays that
+    // role and is covered by the extension tests below.
+    #[cfg(unix)]
     #[test]
     fn non_executable_file_is_not_a_match() {
         let tmp = env::temp_dir().join("anywhich-test-perm");
@@ -208,9 +237,14 @@ mod tests {
     }
 
     fn make_executable(path: &Path) {
-        use std::os::unix::fs::PermissionsExt;
-        let mut perms = fs::metadata(path).unwrap().permissions();
-        perms.set_mode(0o755);
-        fs::set_permissions(path, perms).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut perms = fs::metadata(path).unwrap().permissions();
+            perms.set_mode(0o755);
+            fs::set_permissions(path, perms).unwrap();
+        }
+        #[cfg(windows)]
+        let _ = path;
     }
 }

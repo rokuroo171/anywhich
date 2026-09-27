@@ -101,9 +101,25 @@ mod tests {
         fs::create_dir_all(&versioned).unwrap();
         #[cfg(unix)]
         std::os::unix::fs::symlink(&versioned, &app_current).unwrap();
-        let (name, version) = current_app(&tmp, "tool").unwrap();
-        assert_eq!(name, "tool");
-        assert_eq!(version, "1.9.0");
+        // Creating the link on Windows needs symlink privilege (admin or
+        // Developer Mode); without it the branch under test cannot run in
+        // the sandbox, so the test steps aside instead of failing.
+        #[cfg(windows)]
+        match std::os::windows::fs::symlink_dir(&versioned, &app_current) {
+            Ok(()) => {
+                let (name, version) = current_app(&tmp, "tool").unwrap();
+                assert_eq!(name, "tool");
+                assert_eq!(version, "1.9.0");
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => {}
+            Err(e) => panic!("unexpected error creating the test link: {e}"),
+        }
+        #[cfg(unix)]
+        {
+            let (name, version) = current_app(&tmp, "tool").unwrap();
+            assert_eq!(name, "tool");
+            assert_eq!(version, "1.9.0");
+        }
         fs::remove_dir_all(&tmp).unwrap();
     }
 

@@ -51,9 +51,6 @@ pub fn reasons(path_hits: &[ResolvedEntry]) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::env;
-    use std::fs;
-    use std::os::unix::fs::PermissionsExt;
     use std::path::Path;
 
     fn entry(source: Source, path: Option<&Path>, version: Option<&str>) -> ResolvedEntry {
@@ -81,8 +78,16 @@ mod tests {
         );
     }
 
+    // Unix-only: the same-file clause depends on resolving a symlink to the
+    // winner's target, and Windows symlink creation needs privileges the
+    // test must not assume. The pure version-clause tests below run everywhere.
+    #[cfg(unix)]
     #[test]
     fn same_canonical_file_beats_version_clause() {
+        use std::env;
+        use std::fs;
+        use std::os::unix::fs::PermissionsExt;
+
         let tmp = env::temp_dir().join("anywhich-why-samefile");
         let real_dir = tmp.join("real");
         let link_dir = tmp.join("link");
