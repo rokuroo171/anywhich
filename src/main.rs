@@ -30,10 +30,7 @@ fn main() -> ExitCode {
     let args = Args::parse();
     let (dirs, skipped) = pathwalk::path_dirs();
     let path_hits = pathwalk::walk(&args.name, &dirs);
-    let results: Vec<(String, resolver::SourceResult)> = resolver::resolvers()
-        .iter()
-        .map(|r| (r.name().to_string(), r.resolve(&args.name)))
-        .collect();
+    let results = resolver::resolve_all(&args.name);
     let merged = merge::merge(path_hits, &results);
 
     if merged.path_hits.is_empty() {

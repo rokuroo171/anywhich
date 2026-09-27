@@ -32,10 +32,29 @@ impl SourceResult {
 ///
 /// Resolvers know nothing about PATH, other resolvers, or ranking. They return
 /// their own matches and near-misses; the core merges.
-pub trait Resolver {
+pub trait Resolver: Send + Sync {
     fn name(&self) -> &'static str;
 
     fn resolve(&self, binary_name: &str) -> SourceResult;
+}
+
+/// Runs every resolver concurrently, one thread each, and returns results in
+/// registry order. A slow resolver holds up the answer only as long as its
+/// own runtime instead of adding to every other source's; npm alone costs
+/// seconds, and sequential spawning made every query pay the sum.
+pub fn resolve_all(binary_name: &str) -> Vec<(String, SourceResult)> {
+    let handles: Vec<_> = resolvers()
+        .into_iter()
+        .map(|r| {
+            let name = r.name().to_string();
+            let binary_name = binary_name.to_string();
+            std::thread::spawn(move || (name, r.resolve(&binary_name)))
+        })
+        .collect();
+    handles
+        .into_iter()
+        .map(|h| h.join().expect("resolver thread panicked"))
+        .collect()
 }
 
 /// Collects every resolver, in output display order.
