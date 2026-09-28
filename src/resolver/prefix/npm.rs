@@ -7,18 +7,27 @@ use serde::Deserialize;
 use crate::entry::{ResolvedEntry, Source};
 use crate::resolver::{Resolver, SourceResult};
 
+/// Windows cannot launch `npm` directly (CreateProcess is exe-only), but
+/// npm ships npm.cmd, which CreateProcess runs through cmd.exe.
+#[cfg(windows)]
+const NPM: &str = "npm.cmd";
+#[cfg(not(windows))]
+const NPM: &str = "npm";
+
 /// npm global installs (`npm -g`) view of one binary query.
 ///
-/// The global tree is located without spawning npm whenever possible: node
-/// on PATH implies `<node_dir>/../lib/node_modules` (Debian-style) or
-/// `<node_dir>/../node_modules` (flat layouts), and the derived root is
-/// accepted only when the directory exists. `npm root -g` runs only as a
-/// fallback for relocated roots (NVM, custom prefixes), because that spawn
-/// costs the best part of a second on every query. Packages are then read
-/// directly (top level, one level into `@scope`); exports come from each
-/// package's `package.json` `bin` field (a map or a bare string), which is
-/// what npm itself uses; the entry name is the bin key, not the filename.
-/// The stub is `<root>/../bin/<name>`, npm's own global install location.
+/// The global tree is located without spawning npm whenever possible:
+/// configured prefixes (`NPM_CONFIG_PREFIX`, `~/.npmrc`) first, then roots
+/// derived from node's location, and `npm root -g` only as a fallback for
+/// anything else, because that spawn costs the best part of a second on
+/// every query. On Windows the default global root is `%APPDATA%\npm`, and
+/// the node installation's own `node_modules` is npm's internals, not the
+/// user's globals, so the APPDATA root is tried before any flat root.
+/// Packages are read directly (top level, one level into `@scope`); exports
+/// come from each package's `package.json` `bin` field (a map or a bare
+/// string), which is what npm itself uses; the entry name is the bin key,
+/// not the filename. The stub is npm's shim for the binary: `<prefix>/bin`
+/// on Unix, the prefix itself on Windows (npm.cmd shims live there).
 pub struct NpmResolver;
 
 impl Resolver for NpmResolver {
@@ -38,7 +47,7 @@ impl Resolver for NpmResolver {
         e.package_name = Some(name);
         e.package_version = version;
         if let Some(prefix) = npm_prefix(&root) {
-            let stub = prefix.join("bin").join(binary_name);
+            let stub = stub_in_prefix(&prefix, binary_name);
             if is_file(&stub) {
                 e.path = Some(stub);
             }
@@ -48,16 +57,16 @@ impl Resolver for NpmResolver {
 }
 
 impl NpmResolver {
-    /// The global node_modules root: derived from node's location when that
-    /// directory really exists, `npm root -g` otherwise, None with no npm at
-    /// all.
+    /// The global node_modules root: the first configured or derived
+    /// candidate that exists on disk, `npm root -g` otherwise, None with no
+    /// npm at all.
     fn global_root(&self) -> Option<PathBuf> {
-        for root in derived_roots(node_dirs()) {
+        for root in derived_roots(configured_prefixes(), &node_dirs()) {
             if root.is_dir() {
                 return Some(root);
             }
         }
-        let out = Command::new("npm").args(["root", "-g"]).output().ok()?;
+        let out = Command::new(NPM).args(["root", "-g"]).output().ok()?;
         if !out.status.success() {
             return None;
         }
@@ -70,21 +79,98 @@ impl NpmResolver {
     }
 }
 
-/// Candidate roots derived from node binary directories, no spawns.
-fn derived_roots(node_bin_dirs: Vec<PathBuf>) -> Vec<PathBuf> {
-    let mut roots = Vec::new();
-    for dir in node_bin_dirs {
-        let prefix = match dir.parent() {
-            Some(p) => p.to_path_buf(),
-            None => continue,
-        };
-        let lib = prefix.join("lib/node_modules");
-        if !roots.contains(&lib) {
-            roots.push(lib);
+/// npm's shim for `binary_name` inside a global prefix: `<prefix>/bin` on
+/// Unix, the prefix itself on Windows, where npm.cmd shims sit in the
+/// prefix directory (AppData\Roaming\npm\npm.cmd).
+fn stub_in_prefix(prefix: &Path, binary_name: &str) -> PathBuf {
+    #[cfg(windows)]
+    return prefix.join(binary_name);
+    #[cfg(not(windows))]
+    let _ = prefix;
+    #[cfg(not(windows))]
+    prefix.join("bin").join(binary_name)
+}
+
+/// User-configured global prefixes, most explicit first: the
+/// npm_config_prefix environment variables, then the `prefix=` line of
+/// ~/.npmrc. npm itself reads both.
+fn configured_prefixes() -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    for var in ["NPM_CONFIG_PREFIX", "npm_config_prefix"] {
+        if let Ok(v) = std::env::var(var) {
+            if !v.is_empty() {
+                out.push(PathBuf::from(v));
+            }
         }
-        let flat = prefix.join("node_modules");
-        if !roots.contains(&flat) {
-            roots.push(flat);
+    }
+    if let Some(home) = user_home() {
+        if let Ok(text) = fs::read_to_string(home.join(".npmrc")) {
+            if let Some(prefix) = npmrc_prefix(&text) {
+                out.push(PathBuf::from(prefix));
+            }
+        }
+    }
+    out
+}
+
+fn user_home() -> Option<PathBuf> {
+    for var in ["HOME", "USERPROFILE"] {
+        if let Ok(v) = std::env::var(var) {
+            if !v.is_empty() {
+                return Some(PathBuf::from(v));
+            }
+        }
+    }
+    None
+}
+
+/// The `prefix=` value of an .npmrc body, if one is set.
+fn npmrc_prefix(text: &str) -> Option<String> {
+    for line in text.lines() {
+        let line = line.trim();
+        let Some(rest) = line.strip_prefix("prefix") else {
+            continue;
+        };
+        let Some(value) = rest.trim_start().strip_prefix('=') else {
+            continue;
+        };
+        let value = value.trim();
+        if !value.is_empty() {
+            return Some(value.to_string());
+        }
+    }
+    None
+}
+
+/// Candidate roots, most explicit first: configured prefixes as
+/// `<prefix>/node_modules`, then the lib layout of every node directory,
+/// then (Windows) npm's default APPDATA root, then flat roots. The APPDATA
+/// root must outrank flat roots: a Program Files node makes its own
+/// node_modules exist, and that holds npm's internals, not user globals.
+fn derived_roots(configured: Vec<PathBuf>, node_bin_dirs: &[PathBuf]) -> Vec<PathBuf> {
+    let mut roots: Vec<PathBuf> = Vec::new();
+    let push = |roots: &mut Vec<PathBuf>, r: PathBuf| {
+        if !roots.contains(&r) {
+            roots.push(r);
+        }
+    };
+    for prefix in configured {
+        push(&mut roots, prefix.join("node_modules"));
+    }
+    for dir in node_bin_dirs {
+        if let Some(prefix) = dir.parent() {
+            push(&mut roots, prefix.join("lib/node_modules"));
+        }
+    }
+    #[cfg(windows)]
+    if let Ok(appdata) = std::env::var("APPDATA") {
+        if !appdata.is_empty() {
+            push(&mut roots, PathBuf::from(appdata).join("npm/node_modules"));
+        }
+    }
+    for dir in node_bin_dirs {
+        if let Some(prefix) = dir.parent() {
+            push(&mut roots, prefix.join("node_modules"));
         }
     }
     roots
@@ -92,28 +178,38 @@ fn derived_roots(node_bin_dirs: Vec<PathBuf>) -> Vec<PathBuf> {
 
 /// Directories holding a node executable, from PATH lookup and common
 /// version-manager locations. PATH order decides priority, so the node the
-/// shell would run also decides the global tree.
+/// shell would run also decides the global tree. Windows executables carry
+/// .exe, so both spellings are probed.
 fn node_dirs() -> Vec<PathBuf> {
+    let exe_names: &[&str] = if cfg!(windows) {
+        &["node.exe", "node"]
+    } else {
+        &["node"]
+    };
+    let has_node = |dir: &Path| exe_names.iter().any(|n| dir.join(n).is_file());
+
     let mut dirs = Vec::new();
     if let Ok(path_var) = std::env::var("PATH") {
         for entry in std::env::split_paths(&path_var) {
-            if entry.join("node").is_file() {
+            if has_node(&entry) {
                 dirs.push(entry);
             }
         }
     }
-    let home = std::env::var("HOME").unwrap_or_default();
-    for candidate in [".nvm/versions/node", ".local/share/nvm/node", ".volta/tools/image/node"] {
-        let base = PathBuf::from(&home).join(candidate);
-        if let Ok(versions) = fs::read_dir(&base) {
-            let mut versioned: Vec<PathBuf> = versions
-                .flatten()
-                .map(|e| e.path().join("bin"))
-                .filter(|p| p.join("node").is_file())
-                .collect();
-            versioned.sort();
-            if let Some(latest) = versioned.pop() {
-                dirs.push(latest);
+    let home = user_home();
+    if let Some(home) = home {
+        for candidate in [".nvm/versions/node", ".local/share/nvm/node", ".volta/tools/image/node"] {
+            let base = home.join(candidate);
+            if let Ok(versions) = fs::read_dir(&base) {
+                let mut versioned: Vec<PathBuf> = versions
+                    .flatten()
+                    .map(|e| e.path().join("bin"))
+                    .filter(|p| has_node(p))
+                    .collect();
+                versioned.sort();
+                if let Some(latest) = versioned.pop() {
+                    dirs.push(latest);
+                }
             }
         }
     }
@@ -205,7 +301,7 @@ struct Manifest {
 enum Bin {
     Map(std::collections::HashMap<String, String>),
     // The target path is parsed for shape but not consumed: the reported
-    // path is npm's stub under prefix/bin, not the manifest's relative file.
+    // path is npm's shim under the prefix, not the manifest's relative file.
     #[allow(dead_code)]
     Single(String),
 }
@@ -317,18 +413,27 @@ mod tests {
 
     #[test]
     fn derivation_prefers_the_lib_layout_of_a_real_node_dir() {
-        let tmp = std::env::temp_dir().join("anywhich-npm-derive");
-        let _ = fs::remove_dir_all(&tmp);
-        let node_dir = tmp.join("node/bin");
-        fs::create_dir_all(&node_dir).unwrap();
-        fs::write(node_dir.join("node"), b"").unwrap();
-        fs::create_dir_all(tmp.join("node/lib/node_modules/cow")).unwrap();
+        let node_dir = PathBuf::from("/n/bin");
+        let roots = derived_roots(Vec::new(), &[node_dir.clone()]);
+        assert_eq!(roots[0], PathBuf::from("/n/lib/node_modules"));
+        assert!(roots.contains(&PathBuf::from("/n/node_modules")));
+    }
 
-        let roots = derived_roots(vec![node_dir]);
-        assert_eq!(roots[0], tmp.join("node/lib/node_modules"));
-        assert!(roots.contains(&tmp.join("node/node_modules")));
+    #[test]
+    fn configured_prefixes_outrank_derived_roots() {
+        let roots = derived_roots(vec![PathBuf::from("/custom")], &[PathBuf::from("/n/bin")]);
+        assert_eq!(roots[0], PathBuf::from("/custom/node_modules"));
+        assert!(roots.contains(&PathBuf::from("/n/lib/node_modules")));
+    }
 
-        fs::remove_dir_all(&tmp).unwrap();
+    #[test]
+    fn npmrc_prefix_reads_the_config_line() {
+        assert_eq!(
+            npmrc_prefix("registry=https://x\nprefix=/home/u/.npm-global\n"),
+            Some("/home/u/.npm-global".to_string())
+        );
+        assert_eq!(npmrc_prefix("registry=https://x\n"), None);
+        assert_eq!(npmrc_prefix("prefix=\n"), None);
     }
 
     #[test]
@@ -341,8 +446,6 @@ mod tests {
         fs::create_dir_all(base.join("v22.5.0/bin")).unwrap();
         fs::write(base.join("v22.5.0/bin/node"), b"").unwrap();
 
-        // node_dirs reads HOME, so run the check through the exported
-        // helper on a synthetic PATH entry pointing at the newest version.
         let dir = base.join("v22.5.0/bin");
         assert!(dir.join("node").is_file());
 
