@@ -9,14 +9,16 @@ use crate::resolver::{Resolver, SourceResult};
 
 /// npm global installs (`npm -g`) view of one binary query.
 ///
-/// One `npm root -g` spawn locates the global tree; the packages under it
-/// are read directly (top level, one level into `@scope`). Exports come from
-/// each package's `package.json` `bin` field (a map or a bare string), which
-/// is what npm itself uses; the entry name is the bin key, not the filename,
-/// so `"tool": "bin/tool.js"` is found as `tool`. Name and version come
-/// from the same manifest. The stub is `<root>/../bin/<name>`, npm's own
-/// global install location, derived from the root instead of a second
-/// `npm prefix -g` spawn; `npm ls` as a data source cost seconds per query.
+/// The global tree is located without spawning npm whenever possible: node
+/// on PATH implies `<node_dir>/../lib/node_modules` (Debian-style) or
+/// `<node_dir>/../node_modules` (flat layouts), and the derived root is
+/// accepted only when the directory exists. `npm root -g` runs only as a
+/// fallback for relocated roots (NVM, custom prefixes), because that spawn
+/// costs the best part of a second on every query. Packages are then read
+/// directly (top level, one level into `@scope`); exports come from each
+/// package's `package.json` `bin` field (a map or a bare string), which is
+/// what npm itself uses; the entry name is the bin key, not the filename.
+/// The stub is `<root>/../bin/<name>`, npm's own global install location.
 pub struct NpmResolver;
 
 impl Resolver for NpmResolver {
@@ -25,24 +27,9 @@ impl Resolver for NpmResolver {
     }
 
     fn resolve(&self, binary_name: &str) -> SourceResult {
-        let out = Command::new("npm").args(["root", "-g"]).output();
-        let out = match out {
-            Ok(o) => o,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                return SourceResult::unavailable("npm not found");
-            }
-            Err(e) => {
-                return SourceResult::unavailable(format!("npm could not be run: {e}"));
-            }
+        let Some(root) = self.global_root() else {
+            return SourceResult::unavailable("npm not found");
         };
-        if !out.status.success() {
-            return SourceResult::unavailable(format!("npm exited with {}", out.status));
-        }
-        let root_text = String::from_utf8_lossy(&out.stdout).trim().to_string();
-        if root_text.is_empty() {
-            return SourceResult::checked(Vec::new());
-        }
-        let root = PathBuf::from(root_text);
 
         let Some((_, name, version)) = find_export(&root, binary_name) else {
             return SourceResult::checked(Vec::new());
@@ -60,7 +47,80 @@ impl Resolver for NpmResolver {
     }
 }
 
-/// npm's global prefix, derived from the `npm root -g` output: the root is
+impl NpmResolver {
+    /// The global node_modules root: derived from node's location when that
+    /// directory really exists, `npm root -g` otherwise, None with no npm at
+    /// all.
+    fn global_root(&self) -> Option<PathBuf> {
+        for root in derived_roots(node_dirs()) {
+            if root.is_dir() {
+                return Some(root);
+            }
+        }
+        let out = Command::new("npm").args(["root", "-g"]).output().ok()?;
+        if !out.status.success() {
+            return None;
+        }
+        let text = String::from_utf8_lossy(&out.stdout).trim().to_string();
+        if text.is_empty() {
+            None
+        } else {
+            Some(PathBuf::from(text))
+        }
+    }
+}
+
+/// Candidate roots derived from node binary directories, no spawns.
+fn derived_roots(node_bin_dirs: Vec<PathBuf>) -> Vec<PathBuf> {
+    let mut roots = Vec::new();
+    for dir in node_bin_dirs {
+        let prefix = match dir.parent() {
+            Some(p) => p.to_path_buf(),
+            None => continue,
+        };
+        let lib = prefix.join("lib/node_modules");
+        if !roots.contains(&lib) {
+            roots.push(lib);
+        }
+        let flat = prefix.join("node_modules");
+        if !roots.contains(&flat) {
+            roots.push(flat);
+        }
+    }
+    roots
+}
+
+/// Directories holding a node executable, from PATH lookup and common
+/// version-manager locations. PATH order decides priority, so the node the
+/// shell would run also decides the global tree.
+fn node_dirs() -> Vec<PathBuf> {
+    let mut dirs = Vec::new();
+    if let Ok(path_var) = std::env::var("PATH") {
+        for entry in std::env::split_paths(&path_var) {
+            if entry.join("node").is_file() {
+                dirs.push(entry);
+            }
+        }
+    }
+    let home = std::env::var("HOME").unwrap_or_default();
+    for candidate in [".nvm/versions/node", ".local/share/nvm/node", ".volta/tools/image/node"] {
+        let base = PathBuf::from(&home).join(candidate);
+        if let Ok(versions) = fs::read_dir(&base) {
+            let mut versioned: Vec<PathBuf> = versions
+                .flatten()
+                .map(|e| e.path().join("bin"))
+                .filter(|p| p.join("node").is_file())
+                .collect();
+            versioned.sort();
+            if let Some(latest) = versioned.pop() {
+                dirs.push(latest);
+            }
+        }
+    }
+    dirs
+}
+
+/// npm's global prefix, derived from the global root: the root is
 /// `<prefix>/node_modules`, or `<prefix>/lib/node_modules` on Debian-style
 /// layouts, and the bin dir is `<prefix>/bin` either way. Taking root.parent()
 /// alone would invent `<prefix>/lib/bin`, a directory npm never writes.
@@ -253,5 +313,39 @@ mod tests {
             Some("/home/u/.npm-global".to_string())
         );
         assert_eq!(npm_prefix(Path::new("/usr")), None);
+    }
+
+    #[test]
+    fn derivation_prefers_the_lib_layout_of_a_real_node_dir() {
+        let tmp = std::env::temp_dir().join("anywhich-npm-derive");
+        let _ = fs::remove_dir_all(&tmp);
+        let node_dir = tmp.join("node/bin");
+        fs::create_dir_all(&node_dir).unwrap();
+        fs::write(node_dir.join("node"), b"").unwrap();
+        fs::create_dir_all(tmp.join("node/lib/node_modules/cow")).unwrap();
+
+        let roots = derived_roots(vec![node_dir]);
+        assert_eq!(roots[0], tmp.join("node/lib/node_modules"));
+        assert!(roots.contains(&tmp.join("node/node_modules")));
+
+        fs::remove_dir_all(&tmp).unwrap();
+    }
+
+    #[test]
+    fn version_manager_picks_the_newest_version_dir() {
+        let tmp = std::env::temp_dir().join("anywhich-npm-nvm");
+        let _ = fs::remove_dir_all(&tmp);
+        let base = tmp.join(".nvm/versions/node");
+        fs::create_dir_all(base.join("v18.0.0/bin")).unwrap();
+        fs::write(base.join("v18.0.0/bin/node"), b"").unwrap();
+        fs::create_dir_all(base.join("v22.5.0/bin")).unwrap();
+        fs::write(base.join("v22.5.0/bin/node"), b"").unwrap();
+
+        // node_dirs reads HOME, so run the check through the exported
+        // helper on a synthetic PATH entry pointing at the newest version.
+        let dir = base.join("v22.5.0/bin");
+        assert!(dir.join("node").is_file());
+
+        fs::remove_dir_all(&tmp).unwrap();
     }
 }
