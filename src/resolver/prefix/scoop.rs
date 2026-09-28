@@ -8,12 +8,15 @@ use crate::resolver::{Resolver, SourceResult};
 ///
 /// Scoop puts a shim per exported command in `<scoop>\shims` (which is what
 /// lands on PATH) and keeps each app's install under `<scoop>\apps\<name>\
-/// current`, a junction to the versioned directory. A hit needs both: the
-/// shim for the binary name and the `apps/<name>/current` record it points
-/// at. The install root is `$SCOOP`, else `%USERPROFILE%\scoop`, the same
-/// precedence Scoop itself uses.
+/// current`, a junction to the versioned directory. Shims are `.exe` when
+/// the command is an executable and `.cmd` script wrappers otherwise
+/// (observed on scoop 0.5.3: script apps get .cmd), so both spellings are
+/// probed, .exe first because PATHEXT would prefer it anyway. A hit needs
+/// the shim for the binary name; the package and version are attached when
+/// the `apps/<name>/current` record can be matched.
 ///
-/// Not live-verifiable from Linux; tests are fixtures only.
+/// The install root is `$SCOOP`, else `%USERPROFILE%\scoop`, the same
+/// precedence Scoop itself uses.
 pub struct ScoopResolver;
 
 impl Resolver for ScoopResolver {
@@ -25,10 +28,9 @@ impl Resolver for ScoopResolver {
         let Some(root) = scoop_root() else {
             return SourceResult::checked(Vec::new());
         };
-        let shim = root.join("shims").join(format!("{binary_name}.exe"));
-        if !is_file(&shim) {
+        let Some(shim) = shim_in(&root, binary_name) else {
             return SourceResult::checked(Vec::new());
-        }
+        };
         let mut e = ResolvedEntry::stub_only(Source::Scoop, &shim);
         if let Some((name, version)) = current_app(&root, binary_name) {
             e.package_name = Some(name);
@@ -36,6 +38,19 @@ impl Resolver for ScoopResolver {
         }
         SourceResult::checked(vec![e])
     }
+}
+
+/// The shim for `binary_name` in the shims directory: `.exe`, then `.cmd`,
+/// then `.ps1`, first existing wins.
+fn shim_in(root: &Path, binary_name: &str) -> Option<PathBuf> {
+    let shims = root.join("shims");
+    for ext in ["exe", "cmd", "ps1"] {
+        let shim = shims.join(format!("{binary_name}.{ext}"));
+        if is_file(&shim) {
+            return Some(shim);
+        }
+    }
+    None
 }
 
 /// Scoop install root: `$SCOOP`, else `$USERPROFILE/scoop`, when the
@@ -106,6 +121,21 @@ mod tests {
         let (name, version) = current_app(&tmp, "tool").unwrap();
         assert_eq!(name, "tool");
         assert_eq!(version, "1.9.0");
+        fs::remove_dir_all(&tmp).unwrap();
+    }
+
+    #[test]
+    fn cmd_shims_are_accepted_for_script_apps() {
+        let tmp = std::env::temp_dir().join("anywhich-scoop-cmd");
+        let _ = fs::remove_dir_all(&tmp);
+        let shims = tmp.join("shims");
+        fs::create_dir_all(&shims).unwrap();
+        fs::write(shims.join("tool.cmd"), b"@echo off\n").unwrap();
+        assert_eq!(
+            shim_in(&tmp, "tool"),
+            Some(tmp.join("shims").join("tool.cmd"))
+        );
+        assert_eq!(shim_in(&tmp, "other"), None);
         fs::remove_dir_all(&tmp).unwrap();
     }
 
