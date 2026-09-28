@@ -149,6 +149,9 @@ mod tests {
         fs::remove_dir_all(&tmp).unwrap();
     }
 
+    // On a case-insensitive filesystem the walk reports the candidate name
+    // it probed (spelled by PATHEXT), not the on-disk spelling, so compare
+    // the extension case-insensitively.
     #[cfg(windows)]
     #[test]
     fn finds_every_match_in_order_and_marks_first_active() {
@@ -167,8 +170,16 @@ mod tests {
         assert_eq!(hits.len(), 2);
         assert!(hits[0].active);
         assert!(!hits[1].active);
-        assert_eq!(hits[0].path, Some(a.join("tool.exe")));
-        assert_eq!(hits[1].path, Some(b.join("tool.exe")));
+        assert_eq!(
+            hits[0].path.as_ref().map(|p| p.file_name().unwrap().to_string_lossy().to_lowercase()),
+            Some("tool.exe".to_string())
+        );
+        assert_eq!(hits[0].path.as_ref().unwrap().parent(), Some(a.as_path()));
+        assert_eq!(
+            hits[1].path.as_ref().map(|p| p.file_name().unwrap().to_string_lossy().to_lowercase()),
+            Some("tool.exe".to_string())
+        );
+        assert_eq!(hits[1].path.as_ref().unwrap().parent(), Some(b.as_path()));
         assert_eq!(hits[0].rank, 0);
         assert_eq!(hits[1].rank, 1);
 
@@ -214,6 +225,9 @@ mod tests {
         fs::remove_dir_all(&tmp).unwrap();
     }
 
+    // Unix: the typed bare name outranks every PATHEXT expansion. The
+    // Windows twin below asserts the equivalent through PATHEXT rules.
+    #[cfg(unix)]
     #[test]
     fn pathext_order_prefers_the_typed_name_then_ext_order() {
         let tmp = env::temp_dir().join("anywhich-test-pathtext-order");
@@ -232,6 +246,40 @@ mod tests {
         let hits = walk_with("tool.BAT", &[tmp.clone()], &exts);
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].path, Some(tmp.join("tool.BAT")));
+
+        fs::remove_dir_all(&tmp).unwrap();
+    }
+
+    // Windows: an extensionless file is not a command (PATHEXT membership
+    // is the executable filter), so the typed-name preference shows up as
+    // the .EXE expansion winning over the later .BAT. On a case-insensitive
+    // filesystem the walked name is what PATHEXT spells, so the extension is
+    // compared case-insensitively.
+    #[cfg(windows)]
+    #[test]
+    fn pathext_order_prefers_the_typed_name_then_ext_order() {
+        let tmp = env::temp_dir().join("anywhich-test-pathtext-order-win");
+        fs::create_dir_all(&tmp).unwrap();
+        for name in ["tool", "tool.EXE", "tool.BAT"] {
+            let p = tmp.join(name);
+            fs::write(&p, b"data").unwrap();
+            make_executable(&p);
+        }
+
+        let exts = pathext::parse(Some(".COM;.EXE;.BAT"));
+        let hits = walk_with("tool", &[tmp.clone()], &exts);
+        assert_eq!(hits.len(), 1);
+        assert_eq!(
+            hits[0].path.as_ref().map(|p| p.file_name().unwrap().to_string_lossy().to_lowercase()),
+            Some("tool.exe".to_string())
+        );
+
+        let hits = walk_with("tool.BAT", &[tmp.clone()], &exts);
+        assert_eq!(hits.len(), 1);
+        assert_eq!(
+            hits[0].path.as_ref().map(|p| p.file_name().unwrap().to_string_lossy().to_lowercase()),
+            Some("tool.bat".to_string())
+        );
 
         fs::remove_dir_all(&tmp).unwrap();
     }

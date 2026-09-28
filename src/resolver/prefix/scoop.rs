@@ -99,28 +99,39 @@ mod tests {
         let app_current = tmp.join("apps").join("tool").join("current");
         let versioned = tmp.join("apps").join("tool").join("1.9.0");
         fs::create_dir_all(&versioned).unwrap();
-        #[cfg(unix)]
-        std::os::unix::fs::symlink(&versioned, &app_current).unwrap();
-        // Creating the link on Windows needs symlink privilege (admin or
-        // Developer Mode); without it the branch under test cannot run in
-        // the sandbox, so the test steps aside instead of failing.
-        #[cfg(windows)]
-        match std::os::windows::fs::symlink_dir(&versioned, &app_current) {
-            Ok(()) => {
-                let (name, version) = current_app(&tmp, "tool").unwrap();
-                assert_eq!(name, "tool");
-                assert_eq!(version, "1.9.0");
-            }
-            Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => {}
-            Err(e) => panic!("unexpected error creating the test link: {e}"),
+        if !make_link(&versioned, &app_current) {
+            eprintln!("skipped: no link support in this sandbox");
+            return;
         }
-        #[cfg(unix)]
-        {
-            let (name, version) = current_app(&tmp, "tool").unwrap();
-            assert_eq!(name, "tool");
-            assert_eq!(version, "1.9.0");
-        }
+        let (name, version) = current_app(&tmp, "tool").unwrap();
+        assert_eq!(name, "tool");
+        assert_eq!(version, "1.9.0");
         fs::remove_dir_all(&tmp).unwrap();
+    }
+
+    /// A junction (what scoop actually creates) needs no privilege on
+    /// Windows; a symlink needs Developer Mode or admin. Either serves the
+    /// read path under test.
+    #[cfg(windows)]
+    fn make_link(target: &Path, link: &Path) -> bool {
+        if std::os::windows::fs::symlink_dir(target, link).is_ok() {
+            return true;
+        }
+        let status = std::process::Command::new("cmd")
+            .args([
+            "/c",
+            "mklink",
+            "/J",
+            &link.to_string_lossy(),
+            &target.to_string_lossy(),
+        ])
+            .status();
+        status.map(|s| s.success()).unwrap_or(false)
+    }
+
+    #[cfg(unix)]
+    fn make_link(target: &Path, link: &Path) -> bool {
+        std::os::unix::fs::symlink(target, link).is_ok()
     }
 
     #[test]

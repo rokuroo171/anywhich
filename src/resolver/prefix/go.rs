@@ -99,9 +99,16 @@ mod tests {
         assert_eq!(dirs, vec![PathBuf::from("/home/t/go/bin")]);
     }
 
+    // Go splits GOPATH on the PATH list separator (: on Unix, ; on
+    // Windows); join_paths is the exact inverse of the split_paths the
+    // resolver applies, so the round trip holds on every platform.
     #[test]
     fn multi_gopath_splits_on_separator() {
-        let dirs = go_bin_dirs(&env("", "/gp1:/gp2", ""));
+        let gopath = std::env::join_paths(["/gp1", "/gp2"])
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+        let dirs = go_bin_dirs(&env("", &gopath, ""));
         assert!(dirs.contains(&PathBuf::from("/gp1/bin")));
         assert!(dirs.contains(&PathBuf::from("/gp2/bin")));
         assert!(!dirs.contains(&PathBuf::from("/go/bin")));

@@ -260,6 +260,31 @@ mod tests {
         assert!(parse_store_entry("nodash").is_none());
     }
 
+    // Profile entries resolve through symlinks to their store path; where
+    // the sandbox cannot create symlinks (Windows without Developer Mode,
+    // restricted Linux mounts), a junction via mklink /J is used on Windows
+    // and the test steps aside where neither exists.
+    fn link_store(target: &Path, link: &Path) -> bool {
+        #[cfg(unix)]
+        return std::os::unix::fs::symlink(target, link).is_ok();
+        #[cfg(windows)]
+        {
+            if std::os::windows::fs::symlink_dir(target, link).is_ok() {
+                return true;
+            }
+            let status = std::process::Command::new("cmd")
+                .args([
+                    "/c",
+                    "mklink",
+                    "/J",
+                    &link.to_string_lossy(),
+                    &target.to_string_lossy(),
+                ])
+                .status();
+            status.map(|s| s.success()).unwrap_or(false)
+        }
+    }
+
     #[test]
     fn profiles_yield_entries_with_provenance_and_rank() {
         let tmp = env::temp_dir().join("anywhich-nix-profiles");
@@ -268,8 +293,10 @@ mod tests {
         fs::create_dir_all(store.join("bin")).unwrap();
         fs::create_dir_all(profile.join("bin")).unwrap();
         fs::write(store.join("bin").join("python3"), b"#!/bin/sh\n").unwrap();
-        #[cfg(unix)]
-        std::os::unix::fs::symlink(&store, profile.join("bin").join("python3")).unwrap();
+        if !link_store(&store, &profile.join("bin").join("python3")) {
+            eprintln!("skipped: no link support in this sandbox");
+            return;
+        }
 
         let mut entries = Vec::new();
         let mut seen = Vec::new();
@@ -294,8 +321,10 @@ mod tests {
         fs::create_dir_all(store.join("bin")).unwrap();
         for p in [&p1, &p2] {
             fs::create_dir_all(p.join("bin")).unwrap();
-            #[cfg(unix)]
-            std::os::unix::fs::symlink(&store, p.join("bin").join("tool")).unwrap();
+            if !link_store(&store, &p.join("bin").join("tool")) {
+                eprintln!("skipped: no link support in this sandbox");
+                return;
+            }
         }
         fs::write(store.join("bin").join("tool"), b"#!/bin/sh\n").unwrap();
 
@@ -318,8 +347,10 @@ mod tests {
         for (root, s) in [(&gens.join("profile-7-link"), &s1), (&gens.join("profile-8-link"), &s2)] {
             fs::create_dir_all(root.join("bin")).unwrap();
             fs::write(s.join("bin").join("tool"), b"#!/bin/sh\n").unwrap();
-            #[cfg(unix)]
-            std::os::unix::fs::symlink(s, root.join("bin").join("tool")).unwrap();
+            if !link_store(s, root.join("bin").join("tool").as_path()) {
+                eprintln!("skipped: no link support in this sandbox");
+                return;
+            }
         }
 
         let mut entries = Vec::new();
