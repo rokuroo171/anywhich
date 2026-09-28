@@ -1,5 +1,9 @@
 pub mod chocolatey;
+pub mod bun;
 pub mod cargo;
+pub mod deno;
+pub mod pnpm;
+pub mod uv;
 pub mod flatpak;
 pub mod go;
 pub mod nix;
