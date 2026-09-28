@@ -10,6 +10,9 @@ use crate::resolver::{Resolver, SourceResult};
 /// merging in a single spawn. `=` pins NAME and VERSION to the first array
 /// element while FILENAMES iterates; the unpinned form dies on rpm 6 with
 /// "array iterator used with different sized arrays", still exiting 0.
+/// The resolver answers only where dnf itself is present: zypper systems
+/// share the same rpm database and get their own resolver over the same
+/// scan, so the dnf label never claims an openSUSE box.
 pub struct DnfResolver;
 
 impl Resolver for DnfResolver {
@@ -18,31 +21,17 @@ impl Resolver for DnfResolver {
     }
 
     fn resolve(&self, binary_name: &str) -> SourceResult {
-        let out = Command::new("rpm")
-            .arg("-qa")
-            .arg("--queryformat=[%{=NAME} %{=VERSION} %{FILENAMES}\\n]")
-            .output();
-        let out = match out {
-            Ok(o) => o,
+        match Command::new("dnf").arg("--version").output() {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                return SourceResult::unavailable("rpm not found");
+                return SourceResult::unavailable("dnf not found");
             }
-            Err(e) => {
-                return SourceResult::unavailable(format!("rpm could not be run: {e}"));
-            }
+            Err(e) => return SourceResult::unavailable(format!("dnf could not be run: {e}")),
+            Ok(_) => {}
+        }
+        let stdout = match rpm_scan_output() {
+            Ok(text) => text,
+            Err(result) => return result,
         };
-        if !out.status.success() {
-            return SourceResult::unavailable(format!("rpm exited with {}", out.status));
-        }
-        // rpm 6 exits 0 even when it rejects the queryformat, printing the
-        // error to stderr and a partial listing to stdout, which parses as a
-        // truthful-looking empty result. Only stderr tells the difference.
-        let stderr = String::from_utf8_lossy(&out.stderr);
-        if stderr.contains("incorrect format") {
-            let reason = stderr.lines().next().unwrap_or_default().trim().to_string();
-            return SourceResult::unavailable(format!("rpm queryformat error: {reason}"));
-        }
-        let stdout = String::from_utf8_lossy(&out.stdout);
         let entries = owned_files(&stdout, binary_name)
             .into_iter()
             .map(|(pkg, version, path)| {
@@ -55,6 +44,37 @@ impl Resolver for DnfResolver {
             .collect();
         SourceResult::checked(entries)
     }
+}
+
+/// Shared rpm scan for the rpm-family resolvers: one spawn returns
+/// "name version /path" for every installed file, or an Unavailable result
+/// carrying the failure reason.
+pub fn rpm_scan_output() -> Result<String, SourceResult> {
+    let out = Command::new("rpm")
+        .arg("-qa")
+        .arg("--queryformat=[%{=NAME} %{=VERSION} %{FILENAMES}\\n]")
+        .output();
+    let out = match out {
+        Ok(o) => o,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            return Err(SourceResult::unavailable("rpm not found"));
+        }
+        Err(e) => {
+            return Err(SourceResult::unavailable(format!("rpm could not be run: {e}")));
+        }
+    };
+    if !out.status.success() {
+        return Err(SourceResult::unavailable(format!("rpm exited with {}", out.status)));
+    }
+    // rpm 6 exits 0 even when it rejects the queryformat, printing the
+    // error to stderr and a partial listing to stdout, which parses as a
+    // truthful-looking empty result. Only stderr tells the difference.
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    if stderr.contains("incorrect format") {
+        let reason = stderr.lines().next().unwrap_or_default().trim().to_string();
+        return Err(SourceResult::unavailable(format!("rpm queryformat error: {reason}")));
+    }
+    Ok(String::from_utf8_lossy(&out.stdout).into_owned())
 }
 
 /// One (package, version, path) per installed rpm whose file list contains
