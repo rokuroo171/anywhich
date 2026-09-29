@@ -53,21 +53,31 @@ fn shim_in(root: &Path, binary_name: &str) -> Option<PathBuf> {
     None
 }
 
-/// Scoop install root: `$SCOOP`, else `$USERPROFILE/scoop`, when the
-/// directory exists.
+/// Scoop install root: `$SCOOP` used verbatim when it is a directory, else
+/// `$USERPROFILE/scoop` when that exists. Scoop itself treats `$SCOOP` as
+/// the root as-is (nothing is appended to it) and falls back to `~\scoop`.
 fn scoop_root() -> Option<PathBuf> {
-    for var in ["SCOOP", "USERPROFILE"] {
-        if let Ok(base) = std::env::var(var) {
-            if base.is_empty() {
-                continue;
-            }
+    root_from(
+        std::env::var("SCOOP").ok().as_deref(),
+        std::env::var("USERPROFILE").ok().as_deref(),
+    )
+}
+
+/// scoop_root() with the environment injected, so the precedence rules are
+/// fixture-testable.
+fn root_from(scoop_env: Option<&str>, userprofile: Option<&str>) -> Option<PathBuf> {
+    if let Some(base) = scoop_env {
+        if !base.is_empty() {
             let root = PathBuf::from(base);
             if is_dir(&root) {
                 return Some(root);
             }
         }
     }
-    None
+    userprofile
+        .filter(|p| !p.is_empty())
+        .map(|p| PathBuf::from(p).join("scoop"))
+        .filter(|root| is_dir(root))
 }
 
 /// (app name, version) from the `apps/<name>/current` directory for a shim
@@ -162,6 +172,40 @@ mod tests {
     #[cfg(unix)]
     fn make_link(target: &Path, link: &Path) -> bool {
         std::os::unix::fs::symlink(target, link).is_ok()
+    }
+
+    #[test]
+    fn userprofile_fallback_appends_scoop() {
+        let tmp = std::env::temp_dir().join("anywhich-scoop-root");
+        let _ = fs::remove_dir_all(&tmp);
+        let scoop = tmp.join("scoop");
+        fs::create_dir_all(&scoop).unwrap();
+        let root = root_from(None, Some(tmp.to_str().unwrap())).unwrap();
+        assert_eq!(root, scoop);
+        fs::remove_dir_all(&tmp).unwrap();
+    }
+
+    #[test]
+    fn scoop_env_wins_and_is_used_verbatim() {
+        // $SCOOP is the install root as-is; nothing is appended to it, and
+        // it beats the ~\scoop default when both exist.
+        let tmp = std::env::temp_dir().join("anywhich-scoop-env");
+        let _ = fs::remove_dir_all(&tmp);
+        let custom = tmp.join("custom-root");
+        let profile = tmp.join("profile");
+        fs::create_dir_all(custom.join("shims")).unwrap();
+        fs::create_dir_all(profile.join("scoop")).unwrap();
+        let root =
+            root_from(Some(custom.to_str().unwrap()), Some(profile.to_str().unwrap())).unwrap();
+        assert_eq!(root, custom);
+        fs::remove_dir_all(&tmp).unwrap();
+    }
+
+    #[test]
+    fn no_root_when_neither_location_exists() {
+        assert!(root_from(None, None).is_none());
+        assert!(root_from(None, Some("Z:\\definitely-missing-anywhich")).is_none());
+        assert!(root_from(Some(""), Some("Z:\\definitely-missing-anywhich")).is_none());
     }
 
     #[test]
