@@ -89,13 +89,32 @@ fn owning_package(root: &Path, binary_name: &str) -> Option<(String, String)> {
     best
 }
 
-/// Version from a `<pkg>.version` sidecar file, Chocolatey's record for
-/// unversioned lib directories.
+/// Version for an unversioned lib directory: the `<pkg>.version` sidecar
+/// file when present, else the `<version>` element from the package's
+/// `<pkg>.nuspec`, which Chocolatey caches inside the lib dir for every
+/// package (observed on this machine: lib/jq ships only jq.nuspec).
 fn sidecar_version(pkg_dir: &Path) -> Option<String> {
     let pkg_name = pkg_dir.file_name()?.to_string_lossy().to_string();
     let sidecar = pkg_dir.join(format!("{pkg_name}.version"));
-    let text = fs::read_to_string(sidecar).ok()?;
-    let version = text.trim();
+    if let Ok(text) = fs::read_to_string(sidecar) {
+        let version = text.trim();
+        if !version.is_empty() {
+            return Some(version.to_string());
+        }
+    }
+    nuspec_version(pkg_dir, &pkg_name)
+}
+
+/// `<version>` from `<dir>/<pkg>.nuspec`. Element names are matched
+/// case-insensitively, the way XML names are; slice indices come from the
+/// lowercased copy but apply to the original, which is safe because ASCII
+/// lowercasing preserves byte offsets.
+fn nuspec_version(pkg_dir: &Path, pkg_name: &str) -> Option<String> {
+    let text = fs::read_to_string(pkg_dir.join(format!("{pkg_name}.nuspec"))).ok()?;
+    let lower = text.to_ascii_lowercase();
+    let open = lower.find("<version>")? + "<version>".len();
+    let close = lower[open..].find("</version>")? + open;
+    let version = text[open..close].trim();
     if version.is_empty() {
         None
     } else {
@@ -163,6 +182,34 @@ mod tests {
         fs::create_dir_all(&pkg).unwrap();
         fs::write(pkg.join("tool.version"), "3.2.1\n").unwrap();
         assert_eq!(sidecar_version(&pkg), Some("3.2.1".to_string()));
+        fs::remove_dir_all(&tmp).unwrap();
+    }
+
+    #[test]
+    fn version_falls_back_to_the_cached_nuspec() {
+        let tmp = std::env::temp_dir().join("anywhich-choco-nuspec");
+        let _ = fs::remove_dir_all(&tmp);
+        let pkg = tmp.join("jq");
+        fs::create_dir_all(&pkg).unwrap();
+        fs::write(
+            pkg.join("jq.nuspec"),
+            "<?xml version=\"1.0\"?><package><metadata><id>jq</id>\
+             <version>1.8.1</version></metadata></package>",
+        )
+        .unwrap();
+        assert_eq!(sidecar_version(&pkg), Some("1.8.1".to_string()));
+        fs::remove_dir_all(&tmp).unwrap();
+    }
+
+    #[test]
+    fn sidecar_beats_the_nuspec_when_both_exist() {
+        let tmp = std::env::temp_dir().join("anywhich-choco-both");
+        let _ = fs::remove_dir_all(&tmp);
+        let pkg = tmp.join("tool");
+        fs::create_dir_all(&pkg).unwrap();
+        fs::write(pkg.join("tool.version"), "9.9.9\n").unwrap();
+        fs::write(pkg.join("tool.nuspec"), "<version>1.0.0</version>").unwrap();
+        assert_eq!(sidecar_version(&pkg), Some("9.9.9".to_string()));
         fs::remove_dir_all(&tmp).unwrap();
     }
 
