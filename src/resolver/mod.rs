@@ -79,6 +79,7 @@ pub fn resolvers() -> Vec<Box<dyn Resolver>> {
         Box::new(prefix::pipx::PipxResolver),
         Box::new(prefix::scoop::ScoopResolver),
         Box::new(prefix::chocolatey::ChocolateyResolver),
+        Box::new(prefix::winget::WingetResolver),
     ]
 }
 #[cfg(test)]

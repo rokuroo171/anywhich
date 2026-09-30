@@ -11,3 +11,4 @@ pub mod npm;
 pub mod pipx;
 pub mod scoop;
 pub mod snap;
+pub mod winget;

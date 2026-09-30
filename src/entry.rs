@@ -23,6 +23,7 @@ pub enum Source {
     Pipx,
     Scoop,
     Chocolatey,
+    Winget,
 }
 
 /// One place a queried binary was found, or one candidate a resolver rejected.
@@ -67,6 +68,7 @@ impl Source {
             Source::Pipx => "pipx",
             Source::Scoop => "scoop",
             Source::Chocolatey => "chocolatey",
+            Source::Winget => "winget",
         }
     }
 }
