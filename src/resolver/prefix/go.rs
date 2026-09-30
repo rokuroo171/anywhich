@@ -18,17 +18,30 @@ impl Resolver for GoResolver {
     }
 
     fn resolve(&self, binary_name: &str) -> SourceResult {
-        let env = EnvVars::from_env();
-        let dirs = go_bin_dirs(&env);
-        if let Some(path) = dirs
-            .iter()
-            .map(|dir| dir.join(binary_name))
-            .find(|p| is_file(p))
-        {
-            return SourceResult::checked(vec![ResolvedEntry::stub_only(Source::Go, &path)]);
+        self.resolve_with(&EnvVars::from_env(), binary_name)
+    }
+}
+
+impl GoResolver {
+    /// resolve() with injected env, so the candidate rules are fixture-testable.
+    fn resolve_with(&self, env: &EnvVars, binary_name: &str) -> SourceResult {
+        for dir in go_bin_dirs(env) {
+            for candidate in candidate_names(binary_name) {
+                let path = dir.join(&candidate);
+                if is_file(&path) {
+                    return SourceResult::checked(vec![ResolvedEntry::stub_only(Source::Go, &path)]);
+                }
+            }
         }
         SourceResult::checked(Vec::new())
     }
+}
+
+/// Spellings to probe per bin dir: the name as typed, then the exe
+/// spelling, because `go install` writes `name.exe` on Windows and the
+/// extra stat is free where it never matches.
+fn candidate_names(binary_name: &str) -> Vec<String> {
+    vec![binary_name.to_string(), format!("{binary_name}.exe")]
 }
 
 struct EnvVars {
@@ -39,10 +52,15 @@ struct EnvVars {
 
 impl EnvVars {
     fn from_env() -> Self {
+        // USERPROFILE after HOME because go's own default derives from
+        // os.UserHomeDir, which reads USERPROFILE on native Windows.
+        let home = ["HOME", "USERPROFILE"]
+            .iter()
+            .find_map(|v| std::env::var(v).ok().filter(|s| !s.is_empty()));
         EnvVars {
             gobin: std::env::var("GOBIN").ok(),
             gopath: std::env::var("GOPATH").ok(),
-            home: std::env::var("HOME").ok(),
+            home,
         }
     }
 }
@@ -99,6 +117,16 @@ mod tests {
         assert_eq!(dirs, vec![PathBuf::from("/home/t/go/bin")]);
     }
 
+    // Git Bash sets HOME to /c/Users/...; go on native Windows derives the
+    // default from USERPROFILE instead. from_env accepts either.
+    #[test]
+    fn from_env_falls_back_to_userprofile() {
+        let env = EnvVars::from_env();
+        let has_home = std::env::var("HOME").is_ok_and(|s| !s.is_empty());
+        let has_profile = std::env::var("USERPROFILE").is_ok_and(|s| !s.is_empty());
+        assert_eq!(env.home.is_some(), has_home || has_profile);
+    }
+
     // Go splits GOPATH on the PATH list separator (: on Unix, ; on
     // Windows); join_paths is the exact inverse of the split_paths the
     // resolver applies, so the round trip holds on every platform.
@@ -112,5 +140,35 @@ mod tests {
         assert!(dirs.contains(&PathBuf::from("/gp1/bin")));
         assert!(dirs.contains(&PathBuf::from("/gp2/bin")));
         assert!(!dirs.contains(&PathBuf::from("/go/bin")));
+    }
+
+    // Real-fs probe order: the name as typed wins, then the exe spelling.
+    // Written for every platform so the Windows probe order is testable
+    // from Unix CI, mirroring pathext.rs.
+    #[test]
+    fn typed_name_wins_then_exe_spelling() {
+        let tmp = std::env::temp_dir().join("anywhich-go-probe");
+        let _ = fs::remove_dir_all(&tmp);
+
+        let both = tmp.join("both");
+        fs::create_dir_all(&both).unwrap();
+        fs::write(both.join("tool"), b"").unwrap();
+        fs::write(both.join("tool.exe"), b"").unwrap();
+        let hit = GoResolver.resolve_with(
+            &EnvVars { gobin: Some(both.to_string_lossy().to_string()), gopath: None, home: None },
+            "tool",
+        );
+        assert_eq!(hit.entries[0].path, Some(both.join("tool")));
+
+        let exe_only = tmp.join("exe-only");
+        fs::create_dir_all(&exe_only).unwrap();
+        fs::write(exe_only.join("tool.exe"), b"").unwrap();
+        let hit = GoResolver.resolve_with(
+            &EnvVars { gobin: Some(exe_only.to_string_lossy().to_string()), gopath: None, home: None },
+            "tool",
+        );
+        assert_eq!(hit.entries[0].path, Some(exe_only.join("tool.exe")));
+
+        fs::remove_dir_all(&tmp).unwrap();
     }
 }
