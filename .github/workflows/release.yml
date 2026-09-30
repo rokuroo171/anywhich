@@ -20,6 +20,7 @@ jobs:
           - x86_64-unknown-linux-musl
           - aarch64-unknown-linux-gnu
           - aarch64-unknown-linux-musl
+          - x86_64-pc-windows-gnu
         include:
           - target: x86_64-unknown-linux-musl
             apt: musl-tools
@@ -30,6 +31,12 @@ jobs:
             # Pure-Rust crate: rust-lld plus rust's self-contained musl
             # objects link a static binary without a cross gcc.
             rustflags: -C linker=rust-lld
+          - target: x86_64-pc-windows-gnu
+            # Cross-linking windows-gnu from linux: the mingw gcc is the
+            # target's default linker, no RUSTFLAGS needed. Same target the
+            # CI check job type-checks.
+            apt: gcc-mingw-w64-x86-64
+            exe: anyw.exe
     steps:
       - uses: actions/checkout@v4
 
@@ -53,10 +60,17 @@ jobs:
           version="${GITHUB_REF_NAME#v}"
           dir="anywhich-${version}-${{ matrix.target }}"
           mkdir "$dir"
-          cp "target/${{ matrix.target }}/release/anyw" "$dir/"
+          cp "target/${{ matrix.target }}/release/${{ matrix.exe || 'anyw' }}" "$dir/"
           cp README.md LICENSE-MIT LICENSE-APACHE "$dir/"
-          tar czf "$dir.tar.gz" "$dir"
-          sha256sum "$dir.tar.gz" > "$dir.tar.gz.sha256"
+          # Windows assets ship as zip (the spelling Windows users expect);
+          # everything else is a tarball.
+          if [ -n "${{ matrix.exe }}" ]; then
+            zip -r "$dir.zip" "$dir"
+            sha256sum "$dir.zip" > "$dir.zip.sha256"
+          else
+            tar czf "$dir.tar.gz" "$dir"
+            sha256sum "$dir.tar.gz" > "$dir.tar.gz.sha256"
+          fi
 
       - name: Upload to release
         uses: softprops/action-gh-release@v2
@@ -64,4 +78,5 @@ jobs:
           body_path: CHANGELOG.md
           files: |
             *.tar.gz
+            *.zip
             *.sha256
