@@ -47,8 +47,7 @@ impl Resolver for NpmResolver {
         e.package_name = Some(name);
         e.package_version = version;
         if let Some(prefix) = npm_prefix(&root) {
-            let stub = stub_in_prefix(&prefix, binary_name);
-            if is_file(&stub) {
+            if let Some(stub) = stub_in_prefix(&prefix, binary_name) {
                 e.path = Some(stub);
             }
         }
@@ -79,16 +78,27 @@ impl NpmResolver {
     }
 }
 
-/// npm's shim for `binary_name` inside a global prefix: `<prefix>/bin` on
-/// Unix, the prefix itself on Windows, where npm.cmd shims sit in the
-/// prefix directory (AppData\Roaming\npm\npm.cmd).
-fn stub_in_prefix(prefix: &Path, binary_name: &str) -> PathBuf {
-    #[cfg(windows)]
-    return prefix.join(binary_name);
-    #[cfg(not(windows))]
-    let _ = prefix;
-    #[cfg(not(windows))]
-    prefix.join("bin").join(binary_name)
+/// npm's shim for `binary_name` inside a global prefix, first existing
+/// wins: `<prefix>/bin` on Unix; the prefix itself on Windows, where
+/// npm.cmd shims sit in the prefix directory (AppData\Roaming\npm\npm.cmd)
+/// and the .cmd spelling is the one shells run.
+fn stub_in_prefix(prefix: &Path, binary_name: &str) -> Option<PathBuf> {
+    stub_candidates(prefix, binary_name)
+        .into_iter()
+        .find(|p| is_file(p))
+}
+
+/// Shim candidates in preference order. Written with a runtime cfg! so
+/// both branches stay testable from any platform, as in pathext.rs.
+fn stub_candidates(prefix: &Path, binary_name: &str) -> Vec<PathBuf> {
+    if cfg!(windows) {
+        vec![
+            prefix.join(format!("{binary_name}.cmd")),
+            prefix.join(binary_name),
+        ]
+    } else {
+        vec![prefix.join("bin").join(binary_name)]
+    }
 }
 
 /// User-configured global prefixes, most explicit first: the

@@ -45,10 +45,9 @@ impl Resolver for CargoResolver {
 
     fn resolve(&self, binary_name: &str) -> SourceResult {
         let bin_dir = self.home.join("bin");
-        let bin_path = bin_dir.join(binary_name);
-        if !is_file(&bin_path) {
+        let Some(bin_path) = existing_binary(&bin_dir, binary_name) else {
             return SourceResult::checked(Vec::new());
-        }
+        };
         if let Ok(text) = fs::read_to_string(self.home.join(".crates.toml")) {
             if let Some((crate_name, version)) = crate_for_binary(&text, binary_name) {
                 let mut e = ResolvedEntry::new(Source::Cargo);
@@ -83,6 +82,21 @@ fn crate_for_binary(text: &str, binary_name: &str) -> Option<(String, String)> {
         let name = parts.next()?.to_string();
         let version = parts.next()?.to_string();
         return Some((name, version));
+    }
+    None
+}
+
+/// The binary in `bin_dir` under the name as typed, else the exe spelling,
+/// because cargo writes `name.exe` on Windows and the extra stat is free
+/// where it never matches.
+fn existing_binary(bin_dir: &Path, binary_name: &str) -> Option<PathBuf> {
+    let typed = bin_dir.join(binary_name);
+    if is_file(&typed) {
+        return Some(typed);
+    }
+    let exe = bin_dir.join(format!("{binary_name}.exe"));
+    if is_file(&exe) {
+        return Some(exe);
     }
     None
 }
@@ -130,6 +144,23 @@ mod tests {
         assert_eq!(result.entries.len(), 1);
         assert_eq!(result.entries[0].package_name.as_deref(), Some("ripgrep"));
         assert_eq!(result.entries[0].package_version.as_deref(), Some("14.1.0"));
+        fs::remove_dir_all(&tmp).unwrap();
+    }
+
+    // Windows: cargo writes name.exe, so the probe must try the exe
+    // spelling. Typed name still wins when both exist.
+    #[test]
+    fn exe_spelling_is_probed_after_the_typed_name() {
+        let tmp = std::env::temp_dir().join("anywhich-cargo-exe");
+        let _ = fs::remove_dir_all(&tmp);
+        let r = resolver_with_record(&tmp, Some(RECORD_FIXTURE));
+        fs::write(tmp.join(".cargo/bin").join("rg.exe"), b"").unwrap();
+        let result = r.resolve("rg");
+        assert_eq!(result.entries[0].package_name.as_deref(), Some("ripgrep"));
+        assert_eq!(
+            result.entries[0].path.as_deref(),
+            Some(tmp.join(".cargo/bin/rg.exe").as_path())
+        );
         fs::remove_dir_all(&tmp).unwrap();
     }
 
