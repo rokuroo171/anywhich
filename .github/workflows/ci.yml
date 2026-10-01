@@ -32,3 +32,15 @@ jobs:
       # check without them never compiles the windows ones.
       - name: Check
         run: cargo check --tests --target x86_64-pc-windows-gnu --locked
+
+  windows-test:
+    name: test on windows-latest
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Test
+        run: cargo test --locked
