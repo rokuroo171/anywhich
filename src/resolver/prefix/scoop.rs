@@ -367,7 +367,7 @@ mod tests {
         fs::write(global.join("shims").join("tool.exe"), b"mz").unwrap();
 
         let r = ScoopResolver;
-        let result = r.resolve_in(&[global], "tool");
+        let result = r.resolve_in(&[global.clone()], "tool");
         assert_eq!(result.entries.len(), 1);
         assert_eq!(
             result.entries[0].path.as_deref(),
