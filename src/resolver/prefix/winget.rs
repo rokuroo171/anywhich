@@ -181,7 +181,7 @@ mod tests {
             return;
         }
 
-        let resolver_root = tmp.to_string_lossy().to_string();
+        let resolver_root = tmp.join("Links").to_string_lossy().to_string();
         // SAFETY: single-threaded test binary scope; no other test reads
         // WINGET_LINKS.
         unsafe { std::env::set_var("WINGET_LINKS", &resolver_root) };
