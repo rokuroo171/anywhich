@@ -46,7 +46,7 @@ cargo build --release
 
 The binary lands at `target/release/anyw`. Run the tests with `cargo test`.
 
-Releases: push a tag (`git tag v0.2.0 && git push origin v0.2.0`) and the release workflow builds both platforms and attaches the binaries to the GitHub release. The tag must match the version in `Cargo.toml` — the workflow checks and fails the run otherwise.
+Releases: push a tag (`git tag v0.2.0 && git push origin v0.2.0`) and the release workflow builds both platforms and attaches the binaries to the GitHub release. The tag must match the version in `Cargo.toml`; the workflow checks and fails the run otherwise.
 
 ## License
 
