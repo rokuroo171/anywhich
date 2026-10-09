@@ -111,6 +111,28 @@ mod tests {
 
     const ID: &str = "Example.Tool_Microsoft.Winget.Source_8wekyb3d8bbwe";
 
+    /// Serializes every WINGET_LINKS writer: cargo runs tests in parallel
+    /// threads in one process, and a second set/remove landing between this
+    /// test's set and resolve hands it the wrong links root (or none), which
+    /// is how resolve_reports_id_and_link_path failed under a full run while
+    /// passing in isolation.
+    static LINKS_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    /// set -> resolve -> remove with the lock held, so concurrent tests never
+    /// observe another test's links root.
+    fn resolve_with_links_root(root: &Path) -> SourceResult {
+        let _guard = LINKS_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let root_str = root.to_string_lossy().to_string();
+        // SAFETY: LINKS_LOCK serializes all WINGET_LINKS writers in this test
+        // binary. Concurrent readers (resolve_all in the live tests) only
+        // need the value to stay valid for one resolve, and none of them
+        // assert on winget entries.
+        unsafe { std::env::set_var("WINGET_LINKS", &root_str) };
+        let result = WingetResolver.resolve("tool");
+        unsafe { std::env::remove_var("WINGET_LINKS") };
+        result
+    }
+
     fn temp(name: &str) -> PathBuf {
         let tmp = std::env::temp_dir().join(name);
         let _ = fs::remove_dir_all(&tmp);
@@ -181,12 +203,7 @@ mod tests {
             return;
         }
 
-        let resolver_root = tmp.join("Links").to_string_lossy().to_string();
-        // SAFETY: single-threaded test binary scope; no other test reads
-        // WINGET_LINKS.
-        unsafe { std::env::set_var("WINGET_LINKS", &resolver_root) };
-        let result = WingetResolver.resolve("tool");
-        unsafe { std::env::remove_var("WINGET_LINKS") };
+        let result = resolve_with_links_root(&tmp.join("Links"));
 
         assert_eq!(result.entries.len(), 1);
         assert_eq!(
@@ -201,10 +218,7 @@ mod tests {
     fn missing_link_is_checked_empty() {
         let tmp = temp("anywhich-winget-miss");
         fs::create_dir_all(tmp.join("Links")).unwrap();
-        let resolver_root = tmp.to_string_lossy().to_string();
-        unsafe { std::env::set_var("WINGET_LINKS", &resolver_root) };
-        let result = WingetResolver.resolve("tool");
-        unsafe { std::env::remove_var("WINGET_LINKS") };
+        let result = resolve_with_links_root(&tmp);
         assert!(result.entries.is_empty());
         fs::remove_dir_all(&tmp).unwrap();
     }
